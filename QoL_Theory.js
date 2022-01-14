@@ -284,7 +284,7 @@ var simpleStudent;
 
         // edit in case of emergency
         const vals = [
-            game.dt.log() + game.acceleration.log(),
+            (game.dt * game.acceleration * (game.isRewardActive ? 1.5 : 1)).log(),
             (1 + game.t).log() * 0.7,
             (1 + game.starsTotal).log(),
             (1 + game.db).log() / (100 * (10 + game.db).log10()).sqrt(),
