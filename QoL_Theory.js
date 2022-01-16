@@ -4,12 +4,13 @@ import { Permissions } from "../api/Permissions"
 import { theory } from "../api/Theory";
 import { BigNumber } from "./api/BigNumber";
 import { ui } from "../api/ui/UI"
+import { View } from "./api/ui/View";
 
 var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = 4;
+var version = 7;
 var permissions = Permissions.PERFORM_GAME_ACTIONS
 
 var currency;
@@ -24,6 +25,7 @@ var init = () => {
     currency = theory.createCurrency();
 
     genTables();
+    setInternalState("");
 
     // Toggle restar
     {
@@ -57,7 +59,8 @@ var init = () => {
         pubRatio.getDescription = pubRatio.getInfo = (amount) => {
             const aTheory = game.activeTheory;
             if (aTheory == null || aTheory.id == 8) return "Error: Invalid Theory";
-            return "Publication Ratio:\ " + Utils.getMath(publicationRatios[aTheory.id])
+            const s = (publicationRatios[aTheory.id] > 1) ? Utils.getMath(publicationRatios[aTheory.id]) : "auto"
+            return "Publication Ratio:\ " + s;
         };
 
         pubRatio.bought = (_) => {
@@ -76,7 +79,23 @@ var init = () => {
             autoBuyPopups[aTheory.id].show();
         }
     }
+    setActiveCallbacks();
+}
 
+var getCurrencyBarDelegate = () => ui.createFrame();
+
+// Callbacks
+var setActiveCallbacks;
+{
+    setActiveCallbacks = () => {
+        const aTheory = game.activeTheory;
+        if (aTheory !== null)
+            aTheory.publishing = () => {log(`${aTheory.id} publishing`);resetStats(aTheory);}
+    }
+
+    game.activeTheoryChanged = () => {
+        setActiveCallbacks();
+    }
 
 }
 
@@ -105,8 +124,8 @@ var simpleStar;
 
     simpleStar = () => {
 
-        const starUps = Array.from(game.starBonuses).filter(x => x.id >= 4000 && x.id < 5000);
-        const variables = Array.from(game.variables).filter(x => x.id > 0);
+        const starUps = Array.from(game.starBonuses).filter(x => x.id >= 4000 && x.id < 5000 && x.isAvailable);
+        const variables = Array.from(game.variables).filter(x => x.id > 0 && x.isAvailable);
 
         starUps.forEach(x => x.refund(-1));
 
@@ -271,7 +290,7 @@ var simpleStudent;
 
     simpleStudent = () => {
 
-        const upgrades = Array.from(game.researchUpgrades).filter(x => x.id <= 101);
+        const upgrades = Array.from(game.researchUpgrades).filter(x => x.id <= 101 && x.isAvailable);
         upgrades.forEach(x => x.refund(-1));
         const maxLevels = upgrades.map(x => x.maxLevel);
         const expIndex = upgrades.length - 1;
@@ -365,33 +384,114 @@ var simpleStudent;
     }
 }
 
+
+
+
+// Analyze Theory behavior
+var pubStep, resetStats, pubStats;
+{
+    const HISTORY_LEN = 5;
+
+    const GROWTH_WEIGHT = 2;
+    const DECAY_WEIGHT = 1;
+    const DECAY_LIMIT = 5;
+
+    const addel = (history, newelt) => {
+        if (history.elts.length == HISTORY_LEN) {
+            const oldelt = history.elts.shift();
+            history.sum -= oldelt;
+        }
+        history.elts.push(newelt);
+        history.sum += newelt;
+    }
+
+    resetStats = (aTheory) => {
+
+        pubStats[aTheory.id] = {
+            duration: 0,
+            mult: aTheory.nextPublicationMultiplier.toNumber(), // TODO: remove when SDK updates
+            prevrate: 0,
+            history: {elts: [], sum: 0},
+            decayCnt: 0
+        }
+
+    }
+
+    pubStep = (aTheory) => {
+        if (!aTheory.canPublish) return false;
+
+        const stat = pubStats[aTheory.id];
+
+        const ratio = aTheory.nextPublicationMultiplier / stat.mult;
+        const rate = (ratio.log() / stat.duration).toNumber(); // TODO: remove when SDK updates
+
+        addel(stat.history, rate - stat.prevrate);
+        stat.prevrate = rate;
+
+        log(stat.history.sum);
+
+        if (stat.history.sum > 0) {
+            stat.decayCnt = Math.max(0, stat.decayCnt - GROWTH_WEIGHT);
+        }
+        else if (stat.decayCnt < DECAY_LIMIT) {
+            stat.decayCnt += DECAY_WEIGHT;
+        }
+        else {
+            return true;
+        }
+
+        return false;
+    }
+
+}
+
+
 // Tick actions
 
 var theoryHandler;
 {
     const publishHandler = (aTheory) => {
-        if (aTheory.nextPublicationMultiplier >= publicationRatios[aTheory.id] * aTheory.publicationMultiplier) aTheory.publish();
-    }
-
-    const theoryBuyHandler = (aTheory) => {
-        for (const upgrade of aTheory.upgrades) {
-            const mode = autoBuyModes[aTheory.id][upgrade.id];
-            MODE_HANDLERS[mode](upgrade);
+        if (aTheory.nextPublicationMultiplier >= publicationRatios[aTheory.id] * aTheory.publicationMultiplier) {
+            aTheory.publish();
         }
     }
 
-    theoryHandler = () => {
+    const theoryBuyHandler = (aTheory) => {
+        let bought = false;
+        for (const upgrade of aTheory.upgrades) {
+            if (!upgrade.isAvailable) continue;
+            const mode = autoBuyModes[aTheory.id][upgrade.id];
+            if (MODE_CHECKERS[mode](upgrade)) {
+                if (!bought) bought = true;
+                MODE_HANDLERS[mode](upgrade);
+            }
+        }
+        return bought;
+    }
+
+    theoryHandler = (elapsedTime) => {
         const aTheory = game.activeTheory;
         if (aTheory == null || aTheory.id == 8) return;
 
-        publishHandler(aTheory);
-        theoryBuyHandler(aTheory);
+        pubStats[aTheory.id].duration += elapsedTime;
+
+        if (publicationRatios[aTheory.id] > 1) {
+            publishHandler(aTheory);
+            theoryBuyHandler(aTheory);
+        } else {
+            const bought = theoryBuyHandler(aTheory);
+            if (bought) {
+                const shouldPub = pubStep(aTheory);
+                if (shouldPub) aTheory.publish();
+            }
+        }
+
     }
 }
 
 var tick = (elapsedTime, multiplier) => {
 
-    theoryHandler();
+    theoryHandler(elapsedTime);
 
     if (autoFreq >= MIN_FREQ && game.statistics.tickCount % autoFreq == 0) {
         simpleStar();
@@ -418,27 +518,45 @@ var MODE_HANDLERS;
     }
     MODE_HANDLERS = [never, always, tenth, freeOnly];
 }
+var MODE_CHECKERS;
+{
+    const never = (_) => false;
+    const always = (upgrade) => upgrade.currency.value >= upgrade.cost.getCost(upgrade.level);
+    const tenth = (upgrade) => upgrade.currency.value / 10 >= upgrade.cost.getCost(upgrade.level);
+    const freeOnly = (upgrade) => upgrade.cost.getCost(upgrade.level) == 0;
+    MODE_CHECKERS = [never, always, tenth, freeOnly];
+}
 
-var genpopups, genTables;
+var genTables;
 {
     genTables = () => {
+
+        autoFreq = -1;
+
         autoBuyModes = {};
+        publicationRatios = {};
+
+        pubStats = {};
+
         for (const aTheory of game.theories) {
             if (aTheory.id == 8) continue;
+
             autoBuyModes[aTheory.id] = {};
             for (const upgrade of aTheory.upgrades) {
                 autoBuyModes[aTheory.id][upgrade.id] = 0;
             }
-        }
 
-        publicationRatios = {};
-        for (const aTheory of game.theories) {
             publicationRatios[aTheory.id] = 100;
+
+            resetStats(aTheory);
         }
 
-        autoFreq = 100;
     }
 
+}
+
+var genpopups, genTables;
+{
     const genAutoBuyPopups = () => {
         autoBuyPopups = {}
         const NUM_COLS = 3;
@@ -498,6 +616,7 @@ var genpopups, genTables;
     const genPublicationRatioPopups = () => {
         publicationRatioPopups = {};
         for (const aTheory of game.theories) {
+            if (aTheory.id == 8) continue;
 
             let record = publicationRatios[aTheory.id].toString();
 
@@ -508,17 +627,20 @@ var genpopups, genTables;
             let apply = ui.createButton({
                 text: "Apply"
             })
+            let text = ui.createLabel({
+                text: `Enter the publication ratio desired. Values 1 or less count as auto (beta; will not work properly unless you publish each time you enable this CT)`
+            })
 
             let popup = ui.createPopup({
                 title: `${aTheory.name} Ratio`,
                 content: ui.createStackLayout({
-                    children: [entry, apply]
+                    children: [entry, text, apply]
                 }),
             })
 
             apply.onClicked = () => {
                 const num = parseFloat(record);
-                if (isNaN(num) || num <= 1) return;
+                if (isNaN(num)) return;
                 publicationRatios[aTheory.id] = num;
                 popup.hide();
             }
@@ -568,13 +690,17 @@ var genpopups, genTables;
 }
 
 
-var getInternalState = () => JSON.stringify({autoBuyModes: autoBuyModes, publicationRatios: publicationRatios, autoFreq: autoFreq});
+var getInternalState = () => JSON.stringify({
+    autoBuyModes: autoBuyModes,
+    publicationRatios: publicationRatios,
+    autoFreq: autoFreq,
+    pubStats: pubStats
+});
+
 var setInternalState = (state) => {
     if (state) {
         const newState = JSON.parse(state);
-        autoBuyModes = newState.autoBuyModes;
-        publicationRatios = newState.publicationRatios;
-        autoFreq = newState.autoFreq;
+        Object.assign(this, newState);
     }
     genpopups();
 }
