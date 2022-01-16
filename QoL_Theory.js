@@ -555,7 +555,7 @@ var genTables;
 
 }
 
-var genpopups, genTables;
+var genpopups;
 {
     const genAutoBuyPopups = () => {
         autoBuyPopups = {}
