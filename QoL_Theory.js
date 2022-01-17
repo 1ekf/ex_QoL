@@ -1,20 +1,9 @@
-import { FreeCost } from "../api/Costs";
-import { game } from "../api/Game";
-import { Permissions } from "../api/Permissions"
-import { theory } from "../api/Theory";
-import { BigNumber } from "./api/BigNumber";
-import { ui } from "../api/ui/UI"
-import { View } from "./api/ui/View";
-
 var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = 7;
+var version = 9;
 var permissions = Permissions.PERFORM_GAME_ACTIONS
-
-var currency;
-var reStar, reSigma, pubRatio, theoryButton, autoFreqButton;
 
 var autoBuyPopups, publicationRatioPopups, autoFreqPopup;
 var autoBuyModes, publicationRatios, autoFreq;
@@ -22,67 +11,82 @@ var autoBuyModes, publicationRatios, autoFreq;
 const MIN_FREQ = 10;
 
 var init = () => {
-    currency = theory.createCurrency();
 
     genTables();
-    setInternalState("");
+    genpopups();
 
-    // Toggle restar
-    {
-        reStar = theory.createSingularUpgrade(1, currency, new FreeCost());
-        reStar.description = reStar.info = "Reallocate Stars";
-        reStar.bought = (_) => simpleStar();
-    }
+    setActiveCallbacks();
 
-    // Toggle resigma
-    {
-        reSigma = theory.createSingularUpgrade(2, currency, new FreeCost());
-        reSigma.description = reSigma.info = "Reallocate Students";
-        reSigma.bought = (_) => simpleStudent();
-    }
+    theory.createCurrency(); // required for graph activation
+}
 
-    {
-        autoFreqButton = theory.createSingularUpgrade(3, currency, new FreeCost());
-        autoFreqButton.getDescription = autoFreqButton.getInfo = (amount) => {
+var get2DGraphValue = () => {
+    const aTheory = game.activeTheory;
+    if (aTheory == null || aTheory.id == 8) return 0;
+    return (aTheory.nextPublicationMultiplier/aTheory.publicationMultiplier).log().toNumber();
+}
+var getPrimaryEquation = () => {
+    const aTheory = game.activeTheory;
+    if (aTheory == null || aTheory.id == 8) return "Invalid";
+    return (aTheory.nextPublicationMultiplier/aTheory.publicationMultiplier).toString();
+}
+
+var getCurrencyBarDelegate = () => {
+    let reStar = ui.createButton({
+        text: "Reallocate Stars",
+        onClicked: () => simpleStar()
+    });
+    let reSigma = ui.createButton({
+        text: "Reallocate Students",
+        onClicked: () => simpleStudent()
+    });
+
+    reStar.row = 0;
+    reStar.column = 0;
+    reSigma.row = 0;
+    reSigma.column = 1;
+
+    const autoGrid = ui.createGrid({
+        children: [reStar, reSigma]
+    });
+    
+    let autoFreqButton = ui.createButton({
+        text: () => {
             const f = (autoFreq < MIN_FREQ) ? "Never" : autoFreq.toString() + " ticks";
             return "Auto-reallocation frequency: " + f
-        }
-        autoFreqButton.bought = (_) => {
-            autoFreqPopup.show();
-        }
-    }
+        },
+        onClicked: () => autoFreqPopup.show()
+    });
 
-    // pubRatio
-    {
-        pubRatio = theory.createSingularUpgrade(4, currency, new FreeCost());
-
-        pubRatio.getDescription = pubRatio.getInfo = (amount) => {
+    const pubRatio = ui.createButton({
+        text: () => {
             const aTheory = game.activeTheory;
             if (aTheory == null || aTheory.id == 8) return "Error: Invalid Theory";
-            const s = (publicationRatios[aTheory.id] > 1) ? Utils.getMath(publicationRatios[aTheory.id]) : "auto"
+            const s = (publicationRatios[aTheory.id] > 1) ? publicationRatios[aTheory.id].toString() : "auto"
             return "Publication Ratio:\ " + s;
-        };
-
-        pubRatio.bought = (_) => {
+        },
+        onClicked: () => {
             const aTheory = game.activeTheory;
             if (aTheory == null || aTheory.id == 8) return;
             publicationRatioPopups[aTheory.id].show();
         }
-    }
-
-    {
-        theoryButton = theory.createSingularUpgrade(5, currency, new FreeCost());
-        theoryButton.description = theoryButton.info = "Theory Autobuy Menu";
-        theoryButton.bought = (_) => {
+    });
+    const theoryButton = ui.createButton({
+        text: "Theory Autobuy Menu",
+        onClicked: () => {
             const aTheory = game.activeTheory;
             if (aTheory == null || aTheory.id == 8) return;
             autoBuyPopups[aTheory.id].show();
         }
-    }
-    setActiveCallbacks();
-}
+    });
 
-var getCurrencyBarDelegate = () => ui.createFrame();
+    const stack = ui.createStackLayout({
+        children: [
+            autoGrid, autoFreqButton, pubRatio, theoryButton
+        ]
+    });
+    return stack;
+}
 
 // Callbacks
 var setActiveCallbacks;
@@ -460,10 +464,10 @@ var theoryHandler;
         let bought = false;
         for (const upgrade of aTheory.upgrades) {
             if (!upgrade.isAvailable) continue;
-            const mode = autoBuyModes[aTheory.id][upgrade.id];
-            if (MODE_CHECKERS[mode](upgrade)) {
+            const config = autoBuyModes[aTheory.id][upgrade.id];
+            if (buyCheck(upgrade, config)) {
                 if (!bought) bought = true;
-                MODE_HANDLERS[mode](upgrade);
+                buyProcess(upgrade, config);
             }
         }
         return bought;
@@ -498,33 +502,86 @@ var tick = (elapsedTime, multiplier) => {
         simpleStudent();
     }
 
+    theory.invalidatePrimaryEquation(); // TODO move this
+
 }
 
-const MODE_STRS = ["never", "always", "1/10", "free only"];
-const NUM_MODES = MODE_STRS.length;
-var MODE_HANDLERS;
-{
-    const never = (_) => {};
-    const always = (upgrade) => {
-        while (upgrade.currency.value >= upgrade.cost.getSum(upgrade.level, upgrade.level+100)) upgrade.buy(100);
-        while (upgrade.currency.value >= upgrade.cost.getCost(upgrade.level)) upgrade.buy(1);
-    };
-    const tenth = (upgrade) => {
-        while (upgrade.currency.value / 10 >= upgrade.cost.getSum(upgrade.level, upgrade.level+100)) upgrade.buy(100);
-        while (upgrade.currency.value / 10 >= upgrade.cost.getCost(upgrade.level)) upgrade.buy(1);
-    };
-    const freeOnly = (upgrade) => {
-        if (upgrade.cost.getCost(upgrade.level) == 0) upgrade.buy(1);
-    }
-    MODE_HANDLERS = [never, always, tenth, freeOnly];
+const BUY_MODES = {
+    never: 0,
+    always: 1,
+    tenth: 2,
+    free_only: 3,
+    custom: 4,
+    
+    next: (val) => (val + 1) % 5
 }
-var MODE_CHECKERS;
+var buyCheck;
 {
     const never = (_) => false;
-    const always = (upgrade) => upgrade.currency.value >= upgrade.cost.getCost(upgrade.level);
-    const tenth = (upgrade) => upgrade.currency.value / 10 >= upgrade.cost.getCost(upgrade.level);
-    const freeOnly = (upgrade) => upgrade.cost.getCost(upgrade.level) == 0;
-    MODE_CHECKERS = [never, always, tenth, freeOnly];
+    const free_only = (upgrade) => upgrade.cost.getCost(upgrade.level) == 0;
+    const custom = (upgrade, ratio) => upgrade.currency.value * ratio >= upgrade.cost.getCost(upgrade.level);
+    const always = (upgrade) => custom(upgrade, 1);
+    const tenth = (upgrade) => custom(upgrade, 0.1);
+
+    buyCheck = (upgrade, config) => {
+        switch (config.mode) {
+            case BUY_MODES.never:
+                return never(upgrade);
+            case BUY_MODES.always:
+                return always(upgrade);
+            case BUY_MODES.tenth:
+                return tenth(upgrade);
+            case BUY_MODES.free_only:
+                return free_only(upgrade);
+            case BUY_MODES.custom:
+                return custom(upgrade, config.ratio);
+        }
+    }
+}
+var buyProcess;
+{
+    const never = (_) => {};
+    const free_only = (upgrade) => {
+        if (upgrade.cost.getCost(upgrade.level) == 0) upgrade.buy(1);
+    }
+    const custom = (upgrade, ratio) => {
+        while (upgrade.currency.value * ratio >= upgrade.cost.getSum(upgrade.level, upgrade.level+100)) upgrade.buy(100);
+        while (upgrade.currency.value * ratio >= upgrade.cost.getCost(upgrade.level)) upgrade.buy(1);
+    };
+    const always = (upgrade) => custom(upgrade, 1);
+    const tenth = (upgrade) => custom(upgrade, 0.1);
+
+    buyProcess = (upgrade, config) => {
+        switch (config.mode) {
+            case BUY_MODES.never:
+                return never(upgrade);
+            case BUY_MODES.always:
+                return always(upgrade);
+            case BUY_MODES.tenth:
+                return tenth(upgrade);
+            case BUY_MODES.free_only:
+                return free_only(upgrade);
+            case BUY_MODES.custom:
+                return custom(upgrade, config.ratio);
+        }
+    }
+}
+var buyString;
+{
+    buyString = (config) => {
+        switch (config.mode) {
+            case BUY_MODES.never:
+                return "never";
+            case BUY_MODES.always:
+                return "always";
+            case BUY_MODES.tenth:
+                return "1/10";
+            case BUY_MODES.free_only:
+                return "free only";
+            case BUY_MODES.custom:
+                return `custom: ${config.ratio}`;
+        }
+    }
 }
 
 var genTables;
@@ -543,7 +600,7 @@ var genTables;
 
             autoBuyModes[aTheory.id] = {};
             for (const upgrade of aTheory.upgrades) {
-                autoBuyModes[aTheory.id][upgrade.id] = 0;
+                autoBuyModes[aTheory.id][upgrade.id] = {mode: BUY_MODES.never, ratio: 0.1};
             }
 
             publicationRatios[aTheory.id] = 100;
@@ -564,10 +621,11 @@ var genpopups;
             if (aTheory.id == 8) continue;
             let buttons = [];
             let labels = [];
-            let mode = autoBuyModes[aTheory.id];
             for (const upgrade of aTheory.upgrades) {
                 const desc = upgrade.description;
                 const varname = desc.substring(2, desc.indexOf("=")); // Hacky way to get name
+
+                const config = autoBuyModes[aTheory.id][upgrade.id];
 
                 let label = ui.createLatexLabel({
                     text: `\\(${varname}\\)`,
@@ -576,10 +634,10 @@ var genpopups;
                 labels.push(label);
 
                 let button = ui.createButton();
-                button.text = () => MODE_STRS[mode[upgrade.id]];
+                button.text = () => buyString(config);
                 button.onClicked = () => {
-                    mode[upgrade.id] += 1;
-                    mode[upgrade.id] %= NUM_MODES;
+                    log(JSON.stringify(config));
+                    config.mode = BUY_MODES.next(config.mode);
                 }
                 buttons.push(button);
             }
@@ -608,7 +666,6 @@ var genpopups;
             })
 
             autoBuyPopups[aTheory.id] = popup;
-            autoBuyModes[aTheory.id] = mode;
 
         }
     }
