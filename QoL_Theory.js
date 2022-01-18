@@ -22,11 +22,6 @@ var init = () => {
     theory.createCurrency(); // required for graph activation
 }
 
-var isCurrencyVisible = (index) => false;
-var getPublicationMultiplier = (tau) => BigNumber.ONE;
-var getPublicationMultiplierFormula = (symbol) => "";
-var getTau = () => BigNumber.ZERO;
-
 var get2DGraphValue = () => {
     const aTheory = game.activeTheory;
     if (aTheory == null || aTheory.id == 8) return 0;
@@ -800,8 +795,11 @@ var getInternalState = () => JSON.stringify({
 var setInternalState = (state) => {
     if (state) {
         const newState = JSON.parse(state);
-        if (state.saveVersion == version)
-            Object.assign(this, newState);
+        autoBuyModes = newState.autoBuyModes;
+        publicationRatios = newState.publicationRatios;
+        autoFreq = newState.autoFreq;
+        pubStats = newState.pubStats;
+        useR9 = newState.useR9;
     }
     genpopups();
 }
