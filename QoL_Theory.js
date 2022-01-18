@@ -795,11 +795,7 @@ var getInternalState = () => JSON.stringify({
 var setInternalState = (state) => {
     if (state) {
         const newState = JSON.parse(state);
-        autoBuyModes = newState.autoBuyModes;
-        publicationRatios = newState.publicationRatios;
-        autoFreq = newState.autoFreq;
-        pubStats = newState.pubStats;
-        useR9 = newState.useR9;
+        Object.assign(this, newState);
     }
     genpopups();
 }
