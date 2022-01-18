@@ -2,7 +2,7 @@ var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = 11;
+var version = 12;
 var permissions = Permissions.PERFORM_GAME_ACTIONS
 
 var autoBuyPopups, publicationRatioPopups, autoFreqPopup;
@@ -15,7 +15,7 @@ var init = () => {
     setupToggles();
 
     genTables();
-    genpopups();
+    setInternalState("");
 
     setActiveCallbacks();
 
@@ -55,7 +55,7 @@ var getCurrencyBarDelegate = () => {
             ui.createSwitch({
                 onColor: Color.SWITCH_BACKGROUND,
                 isToggled: () => useR9,
-                onToggled: () => {useR9 = !useR9}
+                onTouched: (e) => {if (!e.type.isReleased()) useR9 = !useR9}
             })
         ]
     })
@@ -624,7 +624,7 @@ var genTables;
     genTables = () => {
 
         autoFreq = -1;
-        useR9 = false;
+        useR9 = true;
 
         autoBuyModes = {};
         publicationRatios = {};
@@ -788,13 +788,15 @@ var getInternalState = () => JSON.stringify({
     publicationRatios: publicationRatios,
     autoFreq: autoFreq,
     pubStats: pubStats,
-    useR9: useR9
+    useR9: useR9,
+    saveVersion: version
 });
 
 var setInternalState = (state) => {
     if (state) {
         const newState = JSON.parse(state);
-        Object.assign(this, newState);
+        if (state.saveVersion == version)
+            Object.assign(this, newState);
     }
     genpopups();
 }
