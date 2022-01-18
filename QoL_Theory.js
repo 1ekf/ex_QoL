@@ -2,7 +2,7 @@ var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = 12;
+var version = 13;
 var permissions = Permissions.PERFORM_GAME_ACTIONS
 
 var autoBuyPopups, publicationRatioPopups, autoFreqPopup;
@@ -795,8 +795,14 @@ var getInternalState = () => JSON.stringify({
 var setInternalState = (state) => {
     if (state) {
         const newState = JSON.parse(state);
-        if (state.saveVersion == version)
-            Object.assign(this, newState);
+        if (state.saveVersion == version) {
+            autoBuyModes = newState.autoBuyModes;
+            publicationRatios = newState.publicationRatios;
+            autoFreq = newState.autoFreq;
+            pubStats = newState.pubStats;
+            useR9 = newState.useR9;
+        }
+
     }
     genpopups();
 }
