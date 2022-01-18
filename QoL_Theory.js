@@ -2,7 +2,7 @@ var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = 13;
+var version = 15;
 var permissions = Permissions.PERFORM_GAME_ACTIONS
 
 var autoBuyPopups, publicationRatioPopups, autoFreqPopup;
@@ -348,7 +348,7 @@ var simpleStudent;
             (1 + game.db).log() / (100 * (10 + game.db).log10()).sqrt(),
             (1 + game.dmu).log() / 1300,
             (1 + game.dpsi).log() / 255 * (10 + game.dpsi).log10().sqrt()
-        ];
+        ].map(v => v.toNumber());
 
         while (true) {
 
@@ -448,7 +448,7 @@ var pubStep, resetStats, pubStats;
 
         pubStats[aTheory.id] = {
             duration: 0,
-            mult: aTheory.nextPublicationMultiplier.toNumber(), // TODO: remove when SDK updates
+            mult: aTheory.nextPublicationMultiplier,
             prevrate: 0,
             history: {elts: [], sum: 0},
             decayCnt: 0
@@ -462,7 +462,7 @@ var pubStep, resetStats, pubStats;
         const stat = pubStats[aTheory.id];
 
         const ratio = aTheory.nextPublicationMultiplier / stat.mult;
-        const rate = (ratio.log() / stat.duration).toNumber(); // TODO: remove when SDK updates
+        const rate = (ratio.log() / stat.duration);
 
         addel(stat.history, rate - stat.prevrate);
         stat.prevrate = rate;
@@ -554,9 +554,9 @@ var buyCheck;
 {
     const never = (_) => false;
     const free_only = (upgrade) => upgrade.cost.getCost(upgrade.level) == 0;
-    const custom = (upgrade, ratio) => upgrade.currency.value * ratio >= upgrade.cost.getCost(upgrade.level);
+    const custom = (upgrade, ratio) => upgrade.currency.value >= upgrade.cost.getCost(upgrade.level) * ratio;
     const always = (upgrade) => custom(upgrade, 1);
-    const tenth = (upgrade) => custom(upgrade, 0.1);
+    const tenth = (upgrade) => custom(upgrade, 10);
 
     buyCheck = (upgrade, config) => {
         switch (config.mode) {
@@ -580,11 +580,11 @@ var buyProcess;
         if (upgrade.cost.getCost(upgrade.level) == 0) upgrade.buy(1);
     }
     const custom = (upgrade, ratio) => {
-        while (upgrade.currency.value * ratio >= upgrade.cost.getSum(upgrade.level, upgrade.level+100)) upgrade.buy(100);
-        while (upgrade.currency.value * ratio >= upgrade.cost.getCost(upgrade.level)) upgrade.buy(1);
+        while (upgrade.currency.value >= upgrade.cost.getSum(upgrade.level, upgrade.level+100) * ratio) upgrade.buy(100);
+        while (upgrade.currency.value >= upgrade.cost.getCost(upgrade.level) * ratio) upgrade.buy(1);
     };
     const always = (upgrade) => custom(upgrade, 1);
-    const tenth = (upgrade) => custom(upgrade, 0.1);
+    const tenth = (upgrade) => custom(upgrade, 10);
 
     buyProcess = (upgrade, config) => {
         switch (config.mode) {
@@ -614,7 +614,7 @@ var buyString;
             case BUY_MODES.free_only:
                 return "free only";
             case BUY_MODES.custom:
-                return `custom: ${config.ratio}`;
+                return `custom: 1/${config.ratio}`;
         }
     }
 }
@@ -636,10 +636,10 @@ var genTables;
 
             autoBuyModes[aTheory.id] = {};
             for (const upgrade of aTheory.upgrades) {
-                autoBuyModes[aTheory.id][upgrade.id] = {mode: BUY_MODES.never, ratio: 0.1};
+                autoBuyModes[aTheory.id][upgrade.id] = {mode: BUY_MODES.never, ratio: BigNumber.TEN};
             }
 
-            publicationRatios[aTheory.id] = 100;
+            publicationRatios[aTheory.id] = BigNumber.HUNDRED;
 
             resetStats(aTheory);
         }
@@ -650,6 +650,37 @@ var genTables;
 
 var genpopups;
 {
+
+    const makeSimpleApplyPopup = (heading, placeholder, description, onClicked) => {
+
+        let record = placeholder;
+
+        let entry = ui.createEntry({
+            placeholder: placeholder,
+            onTextChanged: (_, s) => {record = s}
+        })
+        let apply = ui.createButton({
+            text: "Apply"
+        })
+        let text = ui.createLabel({
+            text: description
+        })
+
+        let popup = ui.createPopup({
+            title: heading,
+            content: ui.createStackLayout({
+                children: [entry, text, apply]
+            }),
+        })
+
+        apply.onClicked = () => {
+            const res = onClicked(record);
+            if (res) popup.hide();
+        }
+
+        return popup;
+    }
+
     const genAutoBuyPopups = () => {
         autoBuyPopups = {}
         const NUM_COLS = 3;
@@ -671,9 +702,40 @@ var genpopups;
 
                 let button = ui.createButton();
                 button.text = () => buyString(config);
-                button.onClicked = () => {
-                    log(JSON.stringify(config));
+
+                const toggle = () => {
                     config.mode = BUY_MODES.next(config.mode);
+                }
+                const makePopup = () => {
+                    const heading = `${varname} ratio`;
+                    const placeholder = config.ratio.toString();
+                    const description = "Enter the desired ratio of (rho)/(price). Must be at least 1.";
+                    const onClicked = (record) => {
+                        const isSuccess = BigNumber.tryParse(record, null);
+                        if (!isSuccess) return false;
+                        const num = parseBigNumber(record);
+                        if (num < 1) return false;
+                        config.ratio = num;
+                        config.mode = BUY_MODES.custom;
+                        log(config.ratio.toNumber());
+                        return true;
+                    }
+
+                    const popup = makeSimpleApplyPopup(heading, placeholder, description, onClicked);
+                    popup.show();
+                }
+                button.onTouched = (e) => {
+                    if (e.x < 0 || e.x > button.width || e.y < 0 || e.y > button.height) return;
+                    switch (e.type) {
+                        case TouchType.SHORTPRESS_RELEASED:
+                            toggle();
+                            break;
+                        case TouchType.LONGPRESS:
+                            makePopup();
+                            break;
+                        default:
+                            break;
+                    }
                 }
                 buttons.push(button);
             }
@@ -711,32 +773,17 @@ var genpopups;
         for (const aTheory of game.theories) {
             if (aTheory.id == 8) continue;
 
-            let record = publicationRatios[aTheory.id].toString();
-
-            let entry = ui.createEntry({
-                placeholder: record,
-                onTextChanged: (_, s) => {record = s}
-            })
-            let apply = ui.createButton({
-                text: "Apply"
-            })
-            let text = ui.createLabel({
-                text: `Enter the publication ratio desired. Values 1 or less count as auto (beta; will not work properly unless you publish each time you enable this CT)`
-            })
-
-            let popup = ui.createPopup({
-                title: `${aTheory.name} Ratio`,
-                content: ui.createStackLayout({
-                    children: [entry, text, apply]
-                }),
-            })
-
-            apply.onClicked = () => {
-                const num = parseFloat(record);
-                if (isNaN(num)) return;
+            const heading = `${aTheory.name} Ratio`;
+            const placeholder = publicationRatios[aTheory.id].toString();
+            const description = `Enter the publication ratio desired. Values 1 or less count as auto (beta; will not work properly unless you publish each time you enable this CT)`;
+            const onClicked = (record) => {
+                const isSuccess = BigNumber.tryParse(record, null);
+                if (!isSuccess) return false;
+                const num = parseBigNumber(record);
                 publicationRatios[aTheory.id] = num;
-                popup.hide();
+                return true;
             }
+            const popup = makeSimpleApplyPopup(heading, placeholder, description, onClicked);
 
             publicationRatioPopups[aTheory.id] = popup;
         }
@@ -782,6 +829,16 @@ var genpopups;
     }
 }
 
+var customReplacer = (_, val) => {
+    try {
+        if (val instanceof BigNumber) return "BigNumber" + val.toBase64String();
+    } catch {}
+    return val;
+}
+var customReviver = (_, val) => {
+    if (val && typeof val === 'string' && val.startsWith("BigNumber")) return BigNumber.fromBase64String(val.substring(9));
+    return val;
+}
 
 var getInternalState = () => JSON.stringify({
     autoBuyModes: autoBuyModes,
@@ -790,11 +847,11 @@ var getInternalState = () => JSON.stringify({
     pubStats: pubStats,
     useR9: useR9,
     saveVersion: version
-});
+}, customReplacer);
 
 var setInternalState = (state) => {
     if (state) {
-        const newState = JSON.parse(state);
+        const newState = JSON.parse(state, customReviver);
         Object.assign(this, newState);
     }
     genpopups();
