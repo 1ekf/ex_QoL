@@ -22,6 +22,8 @@ var init = () => {
     theory.createCurrency(); // required for graph activation
 }
 
+var getTau = () => BigNumber.ZERO;
+
 var get2DGraphValue = () => {
     const aTheory = game.activeTheory;
     if (aTheory == null || aTheory.id == 8) return 0;
