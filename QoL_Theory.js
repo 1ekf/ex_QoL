@@ -2,15 +2,17 @@ var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = 10;
+var version = 11;
 var permissions = Permissions.PERFORM_GAME_ACTIONS
 
 var autoBuyPopups, publicationRatioPopups, autoFreqPopup;
-var autoBuyModes, publicationRatios, autoFreq;
+var autoBuyModes, publicationRatios, autoFreq, useR9;
 
 const MIN_FREQ = 10;
 
 var init = () => {
+
+    setupToggles();
 
     genTables();
     genpopups();
@@ -33,21 +35,41 @@ var getPrimaryEquation = () => {
 
 var getCurrencyBarDelegate = () => {
     let reStar = ui.createButton({
-        text: "Reallocate Stars",
+        text: "Reallocate ★",
         onClicked: () => simpleStar()
     });
     let reSigma = ui.createButton({
-        text: "Reallocate Students",
+        text: "Reallocate σ",
         onClicked: () => simpleStudent()
     });
+
+    let r9toggle = ui.createStackLayout({
+        children: [
+            ui.createLabel({
+                text: "Buy R9?",
+                fontSize: 10,
+                verticalTextAlignment: TextAlignment.END,
+                horizontalTextAlignment: TextAlignment.CENTER,
+                textColor: () => {return useR9 ? Color.TEXT : Color.DEACTIVATED_UPGRADE}
+            }),
+            ui.createSwitch({
+                onColor: Color.SWITCH_BACKGROUND,
+                isToggled: () => useR9,
+                onToggled: () => {useR9 = !useR9}
+            })
+        ]
+    })
 
     reStar.row = 0;
     reStar.column = 0;
     reSigma.row = 0;
     reSigma.column = 1;
+    r9toggle.row = 0;
+    r9toggle.column = 2;
 
     const autoGrid = ui.createGrid({
-        children: [reStar, reSigma]
+        columnDefinitions: ["1*", "1*", "50"],
+        children: [reStar, reSigma, r9toggle]
     });
 
     let autoFreqButton = ui.createButton({
@@ -99,8 +121,16 @@ var setActiveCallbacks;
 
     game.activeTheoryChanged = () => {
         setActiveCallbacks();
+        setupToggles();
     }
 
+}
+
+// Toggle setups
+setupToggles = () => {
+    const aTheory = game.activeTheory;
+    if (aTheory == null || aTheory.id == 8) return;
+    aTheory.isAutoBuyerActive = false;
 }
 
 // Star utility
@@ -297,6 +327,10 @@ var simpleStudent;
 
         const upgrades = Array.from(game.researchUpgrades).filter(x => x.id <= 101 && x.isAvailable);
         upgrades.forEach(x => x.refund(-1));
+
+        if (useR9) game.researchUpgrades[8].buy(-1);
+        else game.researchUpgrades[8].refund(-1)
+
         const maxLevels = upgrades.map(x => x.maxLevel);
         const expIndex = upgrades.length - 1;
         let levels = upgrades.map(x => x.level);
@@ -590,6 +624,7 @@ var genTables;
     genTables = () => {
 
         autoFreq = -1;
+        useR9 = false;
 
         autoBuyModes = {};
         publicationRatios = {};
@@ -752,7 +787,8 @@ var getInternalState = () => JSON.stringify({
     autoBuyModes: autoBuyModes,
     publicationRatios: publicationRatios,
     autoFreq: autoFreq,
-    pubStats: pubStats
+    pubStats: pubStats,
+    useR9: useR9
 });
 
 var setInternalState = (state) => {
