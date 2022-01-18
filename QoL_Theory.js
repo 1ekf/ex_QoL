@@ -22,6 +22,9 @@ var init = () => {
     theory.createCurrency(); // required for graph activation
 }
 
+var isCurrencyVisible = (index) => false;
+var getPublicationMultiplier = (tau) => BigNumber.ONE;
+var getPublicationMultiplierFormula = (symbol) => "";
 var getTau = () => BigNumber.ZERO;
 
 var get2DGraphValue = () => {
