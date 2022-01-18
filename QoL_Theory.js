@@ -2,7 +2,7 @@ var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = 15;
+var version = 16;
 var permissions = Permissions.PERFORM_GAME_ACTIONS
 
 var autoBuyPopups, publicationRatioPopups, autoFreqPopup;
@@ -128,6 +128,8 @@ var setActiveCallbacks;
 
 // Toggle setups
 var setupToggles = () => {
+    return; // TODO disable theory autobuy only if CT autobuy is active.
+
     const aTheory = game.activeTheory;
     if (aTheory == null || aTheory.id == 8) return;
     aTheory.isAutoBuyerActive = false;
