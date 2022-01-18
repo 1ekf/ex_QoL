@@ -127,7 +127,7 @@ var setActiveCallbacks;
 }
 
 // Toggle setups
-setupToggles = () => {
+var setupToggles = () => {
     const aTheory = game.activeTheory;
     if (aTheory == null || aTheory.id == 8) return;
     aTheory.isAutoBuyerActive = false;
@@ -795,14 +795,8 @@ var getInternalState = () => JSON.stringify({
 var setInternalState = (state) => {
     if (state) {
         const newState = JSON.parse(state);
-        if (state.saveVersion == version) {
-            autoBuyModes = newState.autoBuyModes;
-            publicationRatios = newState.publicationRatios;
-            autoFreq = newState.autoFreq;
-            pubStats = newState.pubStats;
-            useR9 = newState.useR9;
-        }
-
+        if (state.saveVersion == version)
+            Object.assign(this, newState);
     }
     genpopups();
 }
