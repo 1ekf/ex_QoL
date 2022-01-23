@@ -2,7 +2,7 @@ var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = 16;
+var version = 17;
 var permissions = Permissions.PERFORM_GAME_ACTIONS
 
 var autoBuyPopups, publicationRatioPopups, autoFreqPopup;
@@ -324,8 +324,8 @@ var simpleStudent;
 
     simpleStudent = () => {
 
-        // number of purchases to backtrack and brute force; 6 if gradf < ee30k, 10 otherwise
-        const REFUND_CNT = game.statistics.graduationF < BigNumber.fromComponents(1, 2, 29994) ? 6 : 10;
+        // number of purchases to backtrack and brute force; 4 if gradf < ee30k, 10 otherwise
+        const REFUND_CNT = game.statistics.graduationF < BigNumber.fromComponents(1, 2, 29994) ? 4 : 10;
 
         const upgrades = Array.from(game.researchUpgrades).filter(x => x.id <= 101 && x.isAvailable);
         upgrades.forEach(x => x.refund(-1));
