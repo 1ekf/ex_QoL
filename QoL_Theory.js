@@ -2,7 +2,7 @@ var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = 17;
+var version = 18;
 var permissions = Permissions.PERFORM_GAME_ACTIONS
 
 var autoBuyPopups, publicationRatioPopups, autoFreqPopup;
@@ -320,12 +320,43 @@ var simpleStar;
 
 var simpleStudent;
 {
-    const researchCost = curLevel => curLevel/2 + 1 >> 0;
+
+    const MAX_DFS_SIZE = 1000;
+
+    const researchCost = curLevel => Math.floor(curLevel/2 + 1);
+
+    const maxPurchaseCount = (curLevel, sigma) => {
+        let levels = 0;
+
+        if (researchCost(curLevel) > sigma) return levels;
+
+        if (curLevel % 2 == 1) {
+            sigma -= researchCost(curLevel);
+            curLevel += 1;
+            levels += 1;
+        }
+
+        curLevel += 1;
+        const bulks = Math.floor((-curLevel + Math.sqrt(curLevel*curLevel + 4*sigma)) / 2);
+
+        sigma -= bulks*(curLevel + bulks);
+        curLevel += 2 * bulks - 1;
+        levels += 2 * bulks;
+
+        if (researchCost(curLevel) <= sigma) {
+            // sigma -= researchCost(curLevel);
+            // curLevel += 1;
+            levels += 1;
+        }
+
+        return levels;
+
+    }
 
     simpleStudent = () => {
 
         // number of purchases to backtrack and brute force; 4 if gradf < ee30k, 10 otherwise
-        const REFUND_CNT = game.statistics.graduationF < BigNumber.fromComponents(1, 2, 29994) ? 4 : 10;
+        // const REFUND_CNT = game.statistics.graduationF < BigNumber.fromComponents(1, 2, 29994) ? 4 : 10;
 
         const upgrades = Array.from(game.researchUpgrades).filter(x => x.id <= 101 && x.isAvailable);
         upgrades.forEach(x => x.refund(-1));
@@ -382,8 +413,16 @@ var simpleStudent;
             levels[cand] += 1;
         }
 
-        for (let i = 0; i < REFUND_CNT; i++) {
-            if (history.length == 0) break;
+        while (history.length > 0) {
+            let pool = 1;
+
+            for (let i = 0; i < upgrades.length; i++) {
+                if (levels[i] >= maxLevels[i]) continue;
+                const more = (i == expIndex) ? Math.floor(sigma / 2) : maxPurchaseCount(levels[i], sigma);
+                pool *= Math.min(more, maxLevels[i] - levels[i]);
+            }
+
+            if (pool > MAX_DFS_SIZE) break;
 
             const lastbest = history.pop();
 
@@ -468,8 +507,6 @@ var pubStep, resetStats, pubStats;
 
         addel(stat.history, rate - stat.prevrate);
         stat.prevrate = rate;
-
-        log(stat.history.sum);
 
         if (stat.history.sum > 0) {
             stat.decayCnt = Math.max(0, stat.decayCnt - GROWTH_WEIGHT);
