@@ -2,34 +2,36 @@ var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = 19;
+var version = 20;
 var permissions = Permissions.PERFORM_GAME_ACTIONS
 
 var autoBuyPopups, publicationRatioPopups, autoFreqPopup;
-var autoBuyModes, publicationRatios, autoFreq, useR9;
+var autoBuyModes, publicationRatios, autoFreq;
+var useR9, useAutobuy;
+var aTheoryId;
+var debug;
 
 const MIN_FREQ = 10;
 
 var init = () => {
 
-    setupToggles();
-
     genTables();
-    setInternalState("");
 
-    setActiveCallbacks();
+    setupTheory();
+
+    setInternalState("");
 
     theory.createCurrency(); // required for graph activation
 }
 
 var get2DGraphValue = () => {
+    if (aTheoryId < 0) return 0;
     const aTheory = game.activeTheory;
-    if (aTheory == null || aTheory.id == 8) return 0;
     return (aTheory.nextPublicationMultiplier/aTheory.publicationMultiplier).log().toNumber();
 }
 var getPrimaryEquation = () => {
+    if (aTheoryId < 0) return "Invalid";
     const aTheory = game.activeTheory;
-    if (aTheory == null || aTheory.id == 8) return "Invalid";
     return (aTheory.nextPublicationMultiplier/aTheory.publicationMultiplier).toString();
 }
 
@@ -77,62 +79,96 @@ var getCurrencyBarDelegate = () => {
             const f = (autoFreq < MIN_FREQ) ? "Never" : autoFreq.toString() + " ticks";
             return "Auto-reallocation frequency: " + f
         },
-        onClicked: () => autoFreqPopup.show()
+        onClicked: () => showAutoFreqPopup()
     });
 
     const pubRatio = ui.createButton({
         text: () => {
-            const aTheory = game.activeTheory;
-            if (aTheory == null || aTheory.id == 8) return "Error: Invalid Theory";
-            const s = (publicationRatios[aTheory.id] > 1) ? publicationRatios[aTheory.id].toString() : "auto"
+            if (aTheoryId < 0) return "Error: Invalid Theory";
+            const s = (publicationRatios[aTheoryId] > 1) ? publicationRatios[aTheoryId].toString() : "auto"
             return "Publication Ratio:\ " + s;
         },
         onClicked: () => {
-            const aTheory = game.activeTheory;
-            if (aTheory == null || aTheory.id == 8) return;
-            publicationRatioPopups[aTheory.id].show();
-        }
+            if (aTheoryId >= 0) showPubRatioPopup(aTheoryId);
+        },
+        isVisible: () => aTheoryId >= 0
     });
-    const theoryButton = ui.createButton({
+
+
+    let theoryButton = ui.createButton({
         text: "Theory Autobuy Menu",
         onClicked: () => {
-            const aTheory = game.activeTheory;
-            if (aTheory == null || aTheory.id == 8) return;
-            autoBuyPopups[aTheory.id].show();
-        }
+            if (aTheoryId >= 0) showAutoBuyPopup(aTheoryId);
+        },
+        isVisible: () => aTheoryId >= 0
+    });
+    let theoryToggle = ui.createStackLayout({
+        children: [
+            ui.createLabel({
+                text: "Use Autobuy?",
+                fontSize: 10,
+                verticalTextAlignment: TextAlignment.END,
+                horizontalTextAlignment: TextAlignment.CENTER,
+                textColor: () => aTheoryId >= 0 && useAutobuy[aTheoryId] ? Color.TEXT : Color.DEACTIVATED_UPGRADE 
+            }),
+            ui.createSwitch({
+                onColor: Color.SWITCH_BACKGROUND,
+                isToggled: () => aTheoryId >= 0 ? false || useAutobuy[aTheoryId] : false,
+                onTouched: (e) => {if (e.type == TouchType.PRESSED && aTheoryId >= 0) {
+                    useAutobuy[aTheoryId] = !useAutobuy[aTheoryId];
+                    setupToggles();
+                }}
+            })
+        ],
+        isVisible: () => aTheoryId >= 0
+    })
+
+    theoryButton.row = 0;
+    theoryButton.column = 0;
+    theoryToggle.row = 0;
+    theoryToggle.column = 1;
+    const theoryGrid = ui.createGrid({
+        columnDefinitions: ["1*", "50"],
+        children: [theoryButton, theoryToggle]
+    });
+
+    const debugLabel = ui.createLabel({
+        text: "DEBUG ON",
+        isVisible: () => debug
     });
 
     const stack = ui.createStackLayout({
         children: [
-            autoGrid, autoFreqButton, pubRatio, theoryButton
+            autoGrid, autoFreqButton, pubRatio, theoryGrid, debugLabel
         ]
     });
     return stack;
 }
 
-// Callbacks
-var setActiveCallbacks;
+// Callbacks, toggle setups
+var setupTheory, setupToggles;
 {
-    setActiveCallbacks = () => {
-        const aTheory = game.activeTheory;
-        if (aTheory !== null)
-            aTheory.publishing = () => {log(`${aTheory.id} publishing`);resetStats(aTheory);}
+    game.activeTheoryChanged = () => {
+        setupTheory();
     }
 
-    game.activeTheoryChanged = () => {
-        setActiveCallbacks();
+    setupTheory = () => {
+        updateATheory();
         setupToggles();
     }
 
-}
+    setupToggles = () => {
+        if (aTheoryId >= 0 && useAutobuy[aTheoryId]) game.activeTheory.isAutoBuyerActive = false;
+    }
 
-// Toggle setups
-var setupToggles = () => {
-    return; // TODO disable theory autobuy only if CT autobuy is active.
-
-    const aTheory = game.activeTheory;
-    if (aTheory == null || aTheory.id == 8) return;
-    aTheory.isAutoBuyerActive = false;
+    const updateATheory = () => {
+        const aTheory = game.activeTheory;
+        if (aTheory == null || aTheory.id == 8) {
+            aTheoryId = -1;
+        } else {
+            aTheoryId = aTheory.id;
+        }
+    }
 }
 
 // Star utility
@@ -353,16 +389,48 @@ var simpleStudent;
 
     }
 
+    const debugSimpleStudentSnapshot = () => {
+
+        let output = {}
+        output.sigma = game.sigma.toNumber();
+        output.useR9 = useR9;
+        Array.from(game.researchUpgrades).forEach(x => {output[x.id] = x.level;});
+        return JSON.stringify(output);
+
+    }
+
+    const debugSimpleStudentPopup = (debugTexts) => {
+        const output = debugTexts.join("\n");
+        const popup = ui.createPopup({
+            title: "STUDENT ERROR",
+            content: ui.createStackLayout({
+                children: [
+                    ui.createLabel({text:output}),
+                    ui.createEntry({placeholder:output})
+                ]
+            })
+        })
+        popup.show();
+    }
+
     simpleStudent = () => {
 
         // number of purchases to backtrack and brute force; 4 if gradf < ee30k, 10 otherwise
         // const REFUND_CNT = game.statistics.graduationF < BigNumber.fromComponents(1, 2, 29994) ? 4 : 10;
 
+        var debugTexts = [];
+
+        if (debug) debugTexts.push(debugSimpleStudentSnapshot());
+
         const upgrades = Array.from(game.researchUpgrades).filter(x => x.id <= 101 && x.isAvailable);
         upgrades.forEach(x => x.refund(-1));
 
+        if (debug) debugTexts.push(debugSimpleStudentSnapshot());
+
         if (useR9) game.researchUpgrades[8].buy(-1);
-        else game.researchUpgrades[8].refund(-1)
+        else game.researchUpgrades[8].refund(-1);
+
+        if (debug) debugTexts.push(debugSimpleStudentSnapshot());
 
         const maxLevels = upgrades.map(x => x.maxLevel);
         const expIndex = upgrades.length - 1;
@@ -382,6 +450,9 @@ var simpleStudent;
             (1 + game.dmu).log() / 1300,
             (1 + game.dpsi).log() / 255 * (10 + game.dpsi).log10().sqrt()
         ].map(v => v.toNumber());
+
+        if (debug) debugTexts.push(`vals: [${vals.toString()}]`);
+        if (debug) debugTexts.push(`pass0(${sigma}): [${levels.toString()}]`);
 
         while (true) {
 
@@ -413,6 +484,8 @@ var simpleStudent;
             levels[cand] += 1;
         }
 
+        if (debug) debugTexts.push(`pass1(${sigma}): [${levels.toString()}]`);
+
         while (history.length > 0) {
             let pool = 1;
 
@@ -438,6 +511,8 @@ var simpleStudent;
             }
         }
 
+        if (debug) debugTexts.push(`pass2(${sigma}): [${levels.toString()}]`);
+
         let search = (i, sigma, curSum) => { // TODO un-reuse variables
             if (i == expIndex) {
                 const cnt = Math.min(levels[i] + sigma/2 >> 0, 6);
@@ -461,68 +536,13 @@ var simpleStudent;
         for (let i = 0; i <= expIndex; i++)
             upgrades[i].buy(found.cnt[expIndex - i]);
 
+        if (debug) debugTexts.push(debugSimpleStudentSnapshot());
+
+        if (debug && game.researchUpgrades[8].level != (useR9 ? 3 : 0)) {
+            debugSimpleStudentPopup(debugTexts);
+        }
     }
 }
-
-
-
-
-// Analyze Theory behavior
-var pubStep, resetStats, pubStats;
-{
-    const HISTORY_LEN = 5;
-
-    const GROWTH_WEIGHT = 2;
-    const DECAY_WEIGHT = 1;
-    const DECAY_LIMIT = 5;
-
-    const addel = (history, newelt) => {
-        if (history.elts.length == HISTORY_LEN) {
-            const oldelt = history.elts.shift();
-            history.sum -= oldelt;
-        }
-        history.elts.push(newelt);
-        history.sum += newelt;
-    }
-
-    resetStats = (aTheory) => {
-
-        pubStats[aTheory.id] = {
-            duration: 0,
-            mult: aTheory.nextPublicationMultiplier,
-            prevrate: 0,
-            history: {elts: [], sum: 0},
-            decayCnt: 0
-        }
-
-    }
-
-    pubStep = (aTheory) => {
-        if (!aTheory.canPublish) return false;
-
-        const stat = pubStats[aTheory.id];
-
-        const ratio = aTheory.nextPublicationMultiplier / stat.mult;
-        const rate = (ratio.log() / stat.duration);
-
-        addel(stat.history, rate - stat.prevrate);
-        stat.prevrate = rate;
-
-        if (stat.history.sum > 0) {
-            stat.decayCnt = Math.max(0, stat.decayCnt - GROWTH_WEIGHT);
-        }
-        else if (stat.decayCnt < DECAY_LIMIT) {
-            stat.decayCnt += DECAY_WEIGHT;
-        }
-        else {
-            return true;
-        }
-
-        return false;
-    }
-
-}
-
 
 // Tick actions
 
@@ -548,22 +568,17 @@ var theoryHandler;
     }
 
     theoryHandler = (elapsedTime) => {
-        const aTheory = game.activeTheory;
-        if (aTheory == null || aTheory.id == 8) return;
+        if (aTheoryId < 0) return;
 
-        pubStats[aTheory.id].duration += elapsedTime;
+        const aTheory = game.activeTheory;
 
         if (publicationRatios[aTheory.id] > 1) {
             publishHandler(aTheory);
-            theoryBuyHandler(aTheory);
-        } else {
-            const bought = theoryBuyHandler(aTheory);
-            if (bought) {
-                const shouldPub = pubStep(aTheory);
-                if (shouldPub) aTheory.publish();
-            }
         }
 
+        if (useAutobuy[aTheoryId]) {
+            theoryBuyHandler(aTheory);
+        }
     }
 }
 
@@ -664,11 +679,11 @@ var genTables;
 
         autoFreq = -1;
         useR9 = true;
+        debug = false;
 
         autoBuyModes = {};
         publicationRatios = {};
-
-        pubStats = {};
+        useAutobuy = {};
 
         for (const aTheory of game.theories) {
             if (aTheory.id == 8) continue;
@@ -679,17 +694,15 @@ var genTables;
             }
 
             publicationRatios[aTheory.id] = BigNumber.HUNDRED;
-
-            resetStats(aTheory);
+            useAutobuy[aTheory.id] = false;
         }
 
     }
 
 }
 
-var genpopups;
+var showAutoBuyPopup, showPubRatioPopup, showAutoFreqPopup;
 {
-
     const makeSimpleApplyPopup = (heading, placeholder, description, onClicked) => {
 
         let record = placeholder;
@@ -720,28 +733,43 @@ var genpopups;
         return popup;
     }
 
-    const genAutoBuyPopups = () => {
-        autoBuyPopups = {}
-        const NUM_COLS = 3;
-        for (const aTheory of game.theories) {
-            if (aTheory.id == 8) continue;
+    {
+
+        showAutoBuyPopup = (aTheoryId) => {
+
+            aTheory = game.theories[aTheoryId];
+    
+    
+            let popup = ui.createPopup({
+                title: `${aTheory.name} Panel`
+            })
+
+            popup.content = ratioContent(aTheory);
+            
+            popup.show();
+        }
+
+        const ratioContent = (aTheory) => {
+    
+            const NUM_COLS = 3;
+    
             let buttons = [];
             let labels = [];
             for (const upgrade of aTheory.upgrades) {
                 const desc = upgrade.description;
                 const varname = desc.substring(2, desc.indexOf("=")); // Hacky way to get name
-
+    
                 const config = autoBuyModes[aTheory.id][upgrade.id];
-
+    
                 let label = ui.createLatexLabel({
                     text: `\\(${varname}\\)`,
                     horizontalTextAlignment: TextAlignment.CENTER,
                     verticalTextAlignment: TextAlignment.END});
                 labels.push(label);
-
+    
                 let button = ui.createButton();
                 button.text = () => buyString(config);
-
+    
                 const toggle = () => {
                     config.mode = BUY_MODES.next(config.mode);
                 }
@@ -759,7 +787,7 @@ var genpopups;
                         log(config.ratio.toNumber());
                         return true;
                     }
-
+    
                     const popup = makeSimpleApplyPopup(heading, placeholder, description, onClicked);
                     popup.show();
                 }
@@ -778,7 +806,7 @@ var genpopups;
                 }
                 buttons.push(button);
             }
-
+    
             for (let i = 0; i < aTheory.upgrades.length; i++) {
                 const rem = i % NUM_COLS;
                 const quo = (i - rem) / NUM_COLS;
@@ -787,48 +815,42 @@ var genpopups;
                 buttons[i].row = 2 * quo + 1;
                 buttons[i].column = rem;
             }
-
+    
             let rowDefinitions = [];
             for (let i = 0; i < aTheory.upgrades.length; i = i + NUM_COLS) {
                 rowDefinitions.push("1*");
                 rowDefinitions.push("2*");
             }
 
-            let popup = ui.createPopup({
-                title: `${aTheory.name} Panel`,
-                content: ui.createGrid({
-                    rowDefinitions: rowDefinitions,
-                    children: buttons.concat(labels)
-                })
+            const content = ui.createGrid({
+                rowDefinitions: rowDefinitions,
+                children: buttons.concat(labels)
             })
 
-            autoBuyPopups[aTheory.id] = popup;
-
+            return content;
         }
     }
+    
 
-    const genPublicationRatioPopups = () => {
-        publicationRatioPopups = {};
-        for (const aTheory of game.theories) {
-            if (aTheory.id == 8) continue;
+    showPubRatioPopup = (aTheoryId) => {
+        aTheory = game.theories[aTheoryId];
 
-            const heading = `${aTheory.name} Ratio`;
-            const placeholder = publicationRatios[aTheory.id].toString();
-            const description = `Enter the publication ratio desired. Values 1 or less count as auto (beta; will not work properly unless you publish each time you enable this CT)`;
-            const onClicked = (record) => {
-                const isSuccess = BigNumber.tryParse(record, null);
-                if (!isSuccess) return false;
-                const num = parseBigNumber(record);
-                publicationRatios[aTheory.id] = num;
-                return true;
-            }
-            const popup = makeSimpleApplyPopup(heading, placeholder, description, onClicked);
-
-            publicationRatioPopups[aTheory.id] = popup;
+        const heading = `${aTheory.name} Ratio`;
+        const placeholder = publicationRatios[aTheoryId].toString();
+        const description = `Enter the publication ratio desired. Values 1 or less count as auto (beta; will not work properly unless you publish each time you enable this CT)`;
+        const onClicked = (record) => {
+            const isSuccess = BigNumber.tryParse(record, null);
+            if (!isSuccess) return false;
+            const num = parseBigNumber(record);
+            publicationRatios[aTheoryId] = num;
+            return true;
         }
+        const popup = makeSimpleApplyPopup(heading, placeholder, description, onClicked);
+
+        popup.show();
     }
 
-    const genAutoFreqPopup = () => {
+    showAutoFreqPopup = () => {
 
         let record = autoFreq.toString();
 
@@ -852,21 +874,23 @@ var genpopups;
         })
 
         apply.onClicked = () => {
+            if (record.endsWith('debug')) {
+                debug = true;
+                record = record.slice(0, -5);
+            } else {
+                debug = false;
+            }
             const num = parseInt(record);
             if (isNaN(num)) return;
             autoFreq = num;
             popup.hide();
         }
 
-        autoFreqPopup = popup
-    }
+        popup.show();
 
-    genpopups = () => {
-        genAutoBuyPopups();
-        genPublicationRatioPopups();
-        genAutoFreqPopup();
     }
 }
+
 
 var customReplacer = (_, val) => {
     try {
@@ -883,9 +907,10 @@ var getInternalState = () => JSON.stringify({
     autoBuyModes: autoBuyModes,
     publicationRatios: publicationRatios,
     autoFreq: autoFreq,
-    pubStats: pubStats,
     useR9: useR9,
-    saveVersion: version
+    saveVersion: version,
+    useAutobuy: useAutobuy,
+    debug: debug
 }, customReplacer);
 
 var setInternalState = (state) => {
@@ -893,7 +918,6 @@ var setInternalState = (state) => {
         const newState = JSON.parse(state, customReviver);
         Object.assign(this, newState);
     }
-    genpopups();
 }
 
 init();
