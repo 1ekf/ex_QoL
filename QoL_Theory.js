@@ -885,10 +885,10 @@ class PopupUtils {
 
         apply.onClicked = () => {
             if (record.endsWith('debug')) {
-                debug = true;
+                state.debug = true;
                 record = record.slice(0, -5);
             } else {
-                debug = false;
+                state.debug = false;
             }
             const num = parseInt(record);
             if (isNaN(num)) return;
