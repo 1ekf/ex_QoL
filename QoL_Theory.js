@@ -2,10 +2,12 @@ var id = "eaux_qol";
 var name = "QoL Theory";
 var description = "A custom theory for finer main theory auto-purchase controls and heuristic-based star/student reallocation";
 var authors = "Eaux Tacous#1021";
-var version = "2.01";
+var version = "2.02";
 var permissions = Permissions.PERFORM_GAME_ACTIONS
 
 const MIN_FREQ = 10;
+
+var state, aTheoryState, expState;
 
 var init = () => {
 
@@ -16,53 +18,27 @@ var init = () => {
     theory.createCurrency(); // required for graph activation
 }
 
-const BNtoString = v => {
-    const sSign = v.sign < 0 ? "-" : "";
-    const sDepth = v.depth ? `e^{${v.depth}}` : "";
-    const sExp = v.exponent + (v.depth ? 6 : 0);
+var tick = (elapsedTime, multiplier) => {
 
-    return `${sSign}${sDepth}${sExp}`;
-}
+    expState.updateHooks[MathExpUtils.MODESET.TICK].forEach(
+        el => expState.expMap[el]?.evaluate()
+    )
 
-var state;
-class State {
-    constructor() {
-        this.useR9 = false;
-        this.autoFreq = -1;
-        this.debug = false;
+    ActionUtil.theoryHandler(elapsedTime);
 
-        this.expOrder = [];
-        this.expMap = {};
+    ActionUtil.resetHandler();
 
-        this.theoryStates = {};
-
-        for (const aTheory of game.theories) {
-            if (aTheory.id == 8) continue;
-            this.theoryStates[aTheory.id] = new TheoryState(aTheory);
-        }
+    if (state.autoFreq >= MIN_FREQ && game.statistics.tickCount % state.autoFreq == 0) {
+        AllocUtils.simpleStar();
+        AllocUtils.simpleStudent();
     }
-}
 
-var aTheoryState;
-class TheoryState {
-    constructor(aTheory) {
+    expState.resetHooks[MathExpUtils.MODESET.TICK].forEach(
+        el => expState.expMap[el]?.evaluate()
+    )
 
-        this.version = version;
+    theory.invalidatePrimaryEquation(); // TODO move this
 
-        this.id = aTheory.id;
-
-        this.publicationRatio = -1;
-        this.useAutobuy = false;
-        this.pubTime = 0;
-
-        this.autoBuyModes = {};
-        for (const upgrade of aTheory.upgrades) {
-            this.autoBuyModes[upgrade.id] ={
-                mode: BuyModeUtils.BUY_MODES.never,
-                ratio: BigNumber.TEN
-            };
-        }
-    }
 }
 
 var get2DGraphValue = () => {
@@ -74,7 +50,6 @@ var getPrimaryEquation = () => {
     if (aTheoryState === undefined) return "Invalid";
     return `\\text{Pub Time:} ${aTheoryState.pubTime.toFixed(2)}`;
 }
-
 var getCurrencyBarDelegate = () => {
     
     let reStar = ui.createButton({
@@ -173,6 +148,49 @@ var getCurrencyBarDelegate = () => {
         children: [theoryButton, theoryToggle]
     });
 
+    let i = 0;
+    let vGridColumnDefinitions = [];
+    let vGridChildren = [];
+    for (const target in MathExpUtils.TARGET_NAME) {
+        if (aTheoryState === undefined && target == MathExpUtils.TARGET_NAME.THEORY) continue;
+        const button = ui.createButton({
+            text: MathExpUtils.TARGET_NAME_STR[target],
+            onClicked: () => {
+                PopupUtils.showVarPopup(target)
+            },
+            row: 0,
+            column: i++
+        });
+        vGridColumnDefinitions.push("1*");
+        vGridChildren.push(button);
+    }
+    const variableGrid = ui.createGrid({
+        columnDefinitions: vGridColumnDefinitions,
+        children: vGridChildren,
+    })
+
+
+    i = 0;
+    vGridColumnDefinitions = [];
+    vGridChildren = [];
+    for (const exprmode in PopupUtils.exprLabels) {
+        const button = ui.createButton({
+            text: PopupUtils.exprLabels[exprmode].s,
+            onClicked: () => {
+                PopupUtils.showExprPopup(exprmode)
+            },
+            row: 0,
+            column: i++
+        });
+        vGridColumnDefinitions.push("1*");
+        vGridChildren.push(button);
+    }
+    const exprGrid = ui.createGrid({
+        columnDefinitions: vGridColumnDefinitions,
+        children: vGridChildren,
+    })
+
+
     const debugLabel = ui.createLabel({
         text: "DEBUG ON",
         isVisible: () => state.debug
@@ -180,10 +198,500 @@ var getCurrencyBarDelegate = () => {
 
     const stack = ui.createStackLayout({
         children: [
-            autoGrid, autoFreqButton, pubRatio, theoryGrid, debugLabel
+            autoGrid, autoFreqButton, pubRatio, theoryGrid, variableGrid, exprGrid,
+            debugLabel
         ]
     });
     return stack;
+}
+
+
+
+const BNtoString = v => {
+    const sSign = v.sign < 0 ? "-" : "";
+    const sDepth = v.depth ? `e^{${v.depth}}` : "";
+    const sExp = v.exponent + (v.depth ? 6 : 0);
+
+    return `${sSign}${sDepth}${sExp}`;
+}
+
+class State {
+    constructor() {
+
+        this.useR9 = false;
+        this.autoFreq = -1;
+        this.debug = false;
+
+        this.globalVarOrder = [];
+        this.globalVarMap = {};
+
+        this.theoryStates = {};
+
+        Object.values(PopupUtils.exprLabels).forEach(val => {
+            const key = val.v;
+            this[key] = undefined
+        });
+
+        for (const aTheory of game.theories) {
+            if (aTheory.id == 8) continue;
+            this.theoryStates[aTheory.id] = new TheoryState(aTheory);
+        }
+    }
+
+    serialize() {
+
+        const serializedGlobalVarMap = Object.entries(this.globalVarMap).reduce(
+            (acc, [key, val]) => {
+                return {...acc, [key]: val.serialize()};
+            },
+            {}
+        )
+        
+        const serializedTheoryStates = Object.entries(this.theoryStates).reduce(
+            (acc, [key, val]) => {
+                return {...acc, [key]: val.serialize()};
+            },
+            {}
+        )
+
+        const target = {
+            ...this,
+            globalVarMap: serializedGlobalVarMap,
+            theoryStates: serializedTheoryStates,
+        }
+
+        Object.values(PopupUtils.exprLabels).forEach(val => {
+            const key = val.v
+            if (this[key] !== undefined) {
+                target[key] = this[key].serialize();
+            }
+        })
+
+        return JSON.stringify(target, customReplacer)
+    }
+
+    importSerialization(s) {
+
+        const intermediate = JSON.parse(s, customReviver);
+
+        if (intermediate.globalVarMap !== undefined) {
+            intermediate.globalVarMap = Object.entries(intermediate.globalVarMap).reduce(
+                (acc, [key, val]) => {
+                    return {...acc, [key]: CustomME.deserialize(val)};
+                },
+                this.globalVarMap
+            )
+        }
+
+        if (intermediate.theoryStates !== undefined) {
+            intermediate.theoryStates = Object.entries(intermediate.theoryStates).reduce(
+                (acc, [key, val]) => {
+                    if (!(key in this.theoryStates)) return acc;
+                    return {...acc, [key]: this.theoryStates[key].importSerialization(val)};
+                },
+                this.theoryStates
+            );
+        }
+
+        Object.values(PopupUtils.exprLabels).forEach(val => {
+            const key = val.v
+            if (key in intermediate) {
+                intermediate[key] = CustomME.deserialize(intermediate[key]);
+            }
+        })
+
+        Object.keys(this).forEach(key => {
+            if (key in intermediate) this[key] = intermediate[key];
+        })
+
+        return this;
+
+    }
+
+}
+
+class TheoryState {
+    constructor(aTheory) {
+
+        this.version = version;
+
+        this.id = aTheory.id;
+
+        this.publicationRatio = -1;
+        this.useAutobuy = false;
+        this.pubTime = 0;
+
+        this.theoryVarOrder = [];
+        this.theoryVarMap = {};
+
+        this.autoBuyModes = {};
+        for (const upgrade of aTheory.upgrades) {
+            this.autoBuyModes[upgrade.id] ={
+                mode: BuyModeUtils.BUY_MODES.never,
+                ratio: BigNumber.TEN
+            };
+        }
+    }
+
+    serialize() {
+        const serializedTheoryVarMap = Object.entries(this.theoryVarMap).reduce(
+            (acc, [key, val]) => {
+                return {...acc, [key]: val.serialize()};
+            },
+            {}
+        )
+        return JSON.stringify({
+            ...this,
+            theoryVarMap: serializedTheoryVarMap
+        }, customReplacer)
+    }
+
+    importSerialization(s) {
+
+        const intermediate = JSON.parse(s, customReviver);
+
+        if (intermediate.theoryVarMap !== undefined) {
+            intermediate.theoryVarMap = Object.entries(intermediate.theoryVarMap).reduce(
+                (acc, [key, val]) => {
+                    return {...acc, [key]: CustomME.deserialize(val)};
+                },
+                {}
+            )
+        }
+        
+        Object.keys(this).forEach(key => {
+            if (key in intermediate) this[key] = intermediate[key];
+        })
+
+        return this;
+    }
+
+}
+
+class MathExpUtils {
+
+    constructor(globalMap, globalOrder, theoryMap, theoryOrder) {
+
+        this.globalMap = globalMap;
+        this.theoryMap = theoryMap;
+        this.expMap = {
+            ...MathExpUtils.internalMap,
+            ...globalMap,
+            ...theoryMap,
+        };
+
+        this.globalOrder = globalOrder;
+        this.theoryOrder = theoryOrder;
+
+        this.targetMap = (target) => {
+            switch (target) {
+                case MathExpUtils.TARGET_NAME.GLOBAL:
+                    return globalMap;
+                case MathExpUtils.TARGET_NAME.THEORY:
+                    return theoryMap;
+                default:
+                    throw `Unknown target map ${target}`
+            }
+        }
+
+        this.targetOrder = (target) => {
+            switch (target) {
+                case MathExpUtils.TARGET_NAME.GLOBAL:
+                    return globalOrder;
+                case MathExpUtils.TARGET_NAME.THEORY:
+                    return theoryOrder;
+                default:
+                    throw `Unknown target map ${target}`
+            }
+        }
+
+        this.genHooks()
+
+    }
+
+    genHooks() {
+        this.updateHooks = {}
+        this.resetHooks = {}
+        
+        for (let type of [
+            {key: 'updateMode', hooks: this.updateHooks},
+            {key: 'resetMode', hooks: this.resetHooks}
+        ]) {
+            for (let mode in MathExpUtils.MODESET) {
+                type.hooks[mode] = []
+            }
+
+            for (let order of [this.globalOrder, this.theoryOrder]) {
+                order.forEach(
+                    name => {
+                        const exp = this.expMap[name]
+                        if (exp[type.key] in MathExpUtils.MODESET) {
+                            type.hooks[exp[type.key]].push(name)
+                        } else {
+                            throw `Unknown mode ${exp[type.key]}`
+                        }
+                    }
+                )
+                
+            }
+        }
+    }
+
+    addVar(target, name, index, obj) {
+
+        const {str, init, updateMode, resetMode} = obj;
+
+        const targetMap = this.targetMap(target);
+        const targetOrder = this.targetOrder(target)
+        
+        if (name in this.expMap) throw `Failed to create var ${name}: already exists`;
+
+        let el = CustomME.create(str, init);
+        el.initialize();
+        el.updateMode = updateMode;
+        el.resetMode = resetMode;
+
+        targetMap[name] = el;
+        this.expMap[name] = el;
+
+        if (index === undefined) {
+            targetOrder.push(name);
+        } else {
+            targetOrder.splice(index, 0, name);
+        }
+
+        this.genHooks();
+    }
+
+    editVar(target, name, index, newname, el, newobj, reinit) {
+
+        if (newname != name) {
+            if (newname in this.expMap) throw `Failed to create var ${name}: already exists`;
+
+            const targetMap = this.targetMap(target);
+            const targetOrder = this.targetOrder(target);
+
+            targetMap[newname] = targetMap[name];
+            delete targetMap[name];
+            this.expMap[newname] = this.expMap[name];
+            delete this.expMap[name];
+            targetOrder[index] = newname;
+        }
+
+        el.update(newobj);
+
+        this.genHooks();
+
+        if (reinit) el.initialize();
+
+    }
+
+    delVar(target, name, index) {
+
+        const targetMap = this.targetMap(target);
+        const targetOrder = this.targetOrder(target);
+
+        if (!(name in targetMap)) throw `Failed to delete var ${name}: does not exist in ${target}`
+
+        delete targetMap[name];
+        delete this.expMap[name];
+
+        if (index === undefined) {
+            index = targetOrder.indexOf(name);
+            if (index < 0) throw "index not found";
+        }
+        
+        targetOrder.splice(index, 1);
+
+        this.genHooks();
+    }
+
+    moveUpVar(target, index) {
+        const targetOrder = this.targetOrder(target);
+        if (index == 0) return;
+
+        const temp = targetOrder[index - 1];
+        targetOrder[index - 1] = targetOrder[index];
+        targetOrder[index] = temp;
+        this.genHooks();
+    }
+
+    moveDownVar(target, index) {
+        const targetOrder = this.targetOrder(target);
+        if (index == targetOrder.length - 1) return;
+
+        const temp = targetOrder[index + 1];
+        targetOrder[index + 1] = targetOrder[index];
+        targetOrder[index] = temp;
+        this.genHooks();
+    }
+
+    moveAnyVar(target, srcindex, destindex) {
+
+        const targetOrder = this.targetOrder(target);
+
+        const temp = targetOrder[srcindex];
+        targetOrder.splice(srcindex, 1);
+        targetOrder.splice(destindex, 0, temp);
+        this.genHooks();
+    }
+
+    replacer(s) {
+        const targ = new RegExp('\\b(?:' + Object.keys(this.expMap).join('|') + ')\\b', 'g')
+
+        return s.replace(targ, a => {
+            if (this.expMap[a] === undefined) throw 'Key not found';
+            if (this.expMap[a].valueString === undefined) throw 'Unevaluated';
+            return `(${this.expMap[a].valueString})`;
+        });
+    }
+}
+MathExpUtils.TARGET_NAME = {
+    GLOBAL: 'GLOBAL',
+    THEORY: 'THEORY',
+}
+MathExpUtils.MODESET = {
+    NONE: 'NONE',
+    TICK: 'TICK',
+    PRESTIGE: 'PRESTIGE',
+    SUPREMACY: 'SUPREMACY',
+    GRADUATION: 'GRADUATION',
+    PUBLISH: 'PUBLISH',
+}
+MathExpUtils.TARGET_NAME_STR = {
+    GLOBAL: 'Global Variable',
+    THEORY: 'Theory Variable',
+}
+MathExpUtils.MODESET_STR = {
+    NONE: 'never',
+    TICK: 'every tick',
+    PRESTIGE: 'every prestige',
+    SUPREMACY: 'every supremacy',
+    GRADUATION: 'every graduation',
+    PUBLISH: 'every publication',
+}
+MathExpUtils.internalMap = {}
+function makeInternalVar(name, getter) {
+    MathExpUtils.internalMap[name] = {
+        get value() {
+            return getter();
+        },
+        get valueString() {
+            const val = this.value;
+            if (val instanceof BigNumber) return BNtoString(val);
+            return "" + val;
+        }
+    }
+}
+makeInternalVar('pubt', () => (aTheoryState !== undefined) ? aTheoryState.pubTime : 0);
+makeInternalVar('pubr', () => {
+    if (aTheoryState === undefined) return -1;
+    const aTheory = game.activeTheory;
+    return aTheory.nextPublicationMultiplier / aTheory.publicationMultiplier;
+})
+
+class CustomME {
+    constructor() {}
+
+    static create(str, init) {
+
+        const template = {
+            str: str,
+            init: init
+        }
+
+        return Object.assign(new CustomME(), template);
+
+    }
+
+    initialize(replacer) {
+
+        delete this.me;
+        delete this.value;
+        delete this.valueString;
+
+        if (this.init !== undefined) {
+
+            replacer = replacer ?? (s => expState.replacer(s));
+
+            let s;
+            try {
+                s = replacer(this.init);
+            } catch (e) {
+                if (e == 'Unevaluated') return;
+                throw e;
+            }
+            const initME = MathExpression.parse(s);
+            const v = initME.evaluate();
+            if (v == null) {
+                // if (initME.isErrorCritical) throw initME.error;
+                return;
+            }
+            this.value = v;
+            this.valueString = BNtoString(v);
+        }
+    }
+
+    evaluate(replacer) {
+
+        replacer = replacer ?? (s => expState.replacer(s))
+
+        let s;
+        try {
+            s = replacer(this.str);
+        } catch (e) {
+            if (e == 'Unevaluated') return;
+            throw e;
+        }
+
+        this.updateME(s);
+        const v = this.me.evaluate();
+
+        if (v == null) {
+            // if (this.me.isErrorCritical) throw initME.error;
+            return;
+        }
+
+        this.value = v;
+        this.valueString = BNtoString(v);
+
+    }
+
+    update(newObj) {
+        Object.assign(this, newObj);
+    }
+
+    updateME(s) {
+        if (this.me === undefined) {
+            this.me = MathExpression.parse(s);
+            return;
+        }
+        
+        let dme = JSON.parse(Base64.decode(this.me.serialize()));
+        dme["Expression"] = '"' + s + '"';
+        const st = Base64.encode(JSON.stringify(dme));
+        this.me = MathExpression.deserialize(st);
+    }
+
+    serialize() {
+        if (this.me === undefined) return JSON.stringify(this, customReplacer);
+
+        return JSON.stringify({
+            ...this,
+            me: this.me.serialize()
+        }, customReplacer);
+    }
+
+    static deserialize(s) {
+
+        const intermediate = JSON.parse(s, customReviver);
+
+        if (intermediate.me !== undefined) {
+            intermediate.me = MathExpression.deserialize(intermediate.me);
+        }
+
+        return Object.assign(new CustomME(), intermediate);
+    }
 }
 
 // Callbacks, toggle setups
@@ -194,7 +702,9 @@ class ManagementUtils {
         this.updateATheoryState();
 
         this.setupToggles();
-        this.setupCallbacks();
+        this.setupATheoryCallbacks();
+        this.setupExpStateCallbacks();
+        this.setupVars()
     }
 
     static updateATheoryState() {
@@ -206,12 +716,11 @@ class ManagementUtils {
         }
     }
 
-
     static setupToggles() {
         if (aTheoryState && aTheoryState.useAutobuy) game.activeTheory.isAutoBuyerActive = false;
     }
 
-    static setupCallbacks() {
+    static setupATheoryCallbacks() {
         if (aTheoryState === undefined) return;
 
         const aTheory = game.activeTheory;
@@ -219,6 +728,62 @@ class ManagementUtils {
             aTheoryState.pubTime = 0;
         }
     }
+
+    static setupExpStateCallbacks() {
+
+        const prefixes = {
+            pre: {hook: 'updateHooks', action: 'evaluate'},
+            post: {hook: 'resetHooks', action: 'initialize'}
+        }
+
+        const actions = {
+            Prestige: 'PRESTIGE',
+            Supremacy: 'SUPREMACY',
+            Graduation: 'GRADUATION'
+        }
+
+        Object.entries(prefixes).forEach(
+            ([prefix, set]) => {
+                Object.entries(actions).forEach(
+                    ([action, name]) => {
+                        game[prefix + action] = () => {
+                            expState[set.hook][MathExpUtils.MODESET[name]].forEach(
+                                el => expState.expMap[el]?.[set.action]()
+                            )
+                        }
+                    }
+                )
+            }
+        )
+
+        if (aTheoryState !== undefined) {
+            game.activeTheory.publishing = () => {
+                expState.updateHooks[MathExpUtils.MODESET.PUBLISH].forEach(
+                    el => expState.expMap[el]?.evaluate()
+                )
+            }
+
+            game.activeTheory.published = () => {
+                expState.resetHooks[MathExpUtils.MODESET.PUBLISH].forEach(
+                    el => expState.expMap[el]?.initalize()
+                )
+            }
+        }
+
+        // TICK is managed in tick()
+
+    }
+
+    static setupVars() {
+
+        expState = new MathExpUtils(
+            state.globalVarMap,
+            state.globalVarOrder,
+            aTheoryState?.theoryVarMap ?? {},
+            aTheoryState?.theoryVarOrder ?? {}
+        )
+    }
+
 }
 game.activeTheoryChanged = () => {
     ManagementUtils.refresh();
@@ -401,8 +966,6 @@ class AllocUtils {
         return level;
     }
 
-    
-
     static simpleStudent() {
 
         // number of purchases to backtrack and brute force; 4 if gradf < ee30k, 10 otherwise
@@ -477,15 +1040,20 @@ class AllocUtils {
         if (state.debug) debugTexts.push(`pass1(${sigma}): [${levels.toString()}]`);
 
         while (history.length > 0) {
+            
             let pool = 1;
+            let dims = 0;
 
             for (let i = 0; i < upgrades.length; i++) {
                 if (levels[i] >= maxLevels[i]) continue;
-                const more = (i == expIndex) ? Math.floor(sigma / 2) : this.maxPurchaseCount(levels[i], sigma);
-                pool *= Math.min(more, maxLevels[i] - levels[i]);
+                let more = (i == expIndex) ? Math.floor(sigma / 2) : this.maxPurchaseCount(levels[i], sigma);
+                pool *= Math.min(more, maxLevels[i] - levels[i]) + 1;
+                dims += 1;
             }
 
-            if (pool > this.MAX_DFS_SIZE) break;
+            const heur = dims < 6 ? pool / 3 : pool / (dims == 6 ? 20 : 60)
+
+            if (heur > this.MAX_DFS_SIZE) break;
 
             const lastbest = history.pop();
 
@@ -556,8 +1124,6 @@ class AllocUtils {
         levels += 2 * bulks;
 
         if (this.researchCost(curLevel) <= sigma) {
-            // sigma -= researchCost(curLevel);
-            // curLevel += 1;
             levels += 1;
         }
 
@@ -589,7 +1155,7 @@ class AllocUtils {
         popup.show();
     }
 }
-AllocUtils.MAX_DFS_SIZE = 1000;
+AllocUtils.MAX_DFS_SIZE = 300;
 
 // Tick actions
 class ActionUtil {
@@ -630,17 +1196,37 @@ class ActionUtil {
         return bought;
     }
 
-}
-var tick = (elapsedTime, multiplier) => {
+    static resetHandler() {
 
-    ActionUtil.theoryHandler(elapsedTime);
+        let action = false;
 
-    if (state.autoFreq >= MIN_FREQ && game.statistics.tickCount % state.autoFreq == 0) {
-        AllocUtils.simpleStar();
-        AllocUtils.simpleStudent();
+        // TODO check prestige condition
+
+        state.prestigeExpr?.evaluate();
+        if (state.prestigeExpr?.valueString !== undefined && state.prestigeExpr.valueString != "0") {
+            game.prestige();
+            action = true;
+            state.prestigeExpr.initialize();
+        }
+
+        // TODO check supremacy condition
+        state.supremacyExpr?.evaluate();
+        if (state.supremacyExpr?.valueString !== undefined && state.supremacyExpr.valueString != "0") {
+            game.supremacy();
+            action = true;
+            state.supremacyExpr.initialize();
+        }
+
+        // TODO check graduation condition
+        state.graduationExpr?.evaluate();
+        if (state.graduationExpr?.valueString !== undefined && state.graduationExpr.valueString != "0") {
+            game.graduate();
+            action = true;
+            state.graduationExpr.initialize();
+        }
+
+        return action;
     }
-
-    theory.invalidatePrimaryEquation(); // TODO move this
 
 }
 
@@ -795,7 +1381,6 @@ class PopupUtils {
                     if (num < 1) return false;
                     config.ratio = num;
                     config.mode = BuyModeUtils.BUY_MODES.custom;
-                    log(config.ratio.toNumber());
                     return true;
                 }
 
@@ -900,183 +1485,265 @@ class PopupUtils {
 
     }
 
-    static showVarPopup() {
-        let buttons = [];
-        for (const name of expOrder) {
-            const el = expMap[name];
-            const label = ui.createLabel({
-                text: `name: ${name}`
-            });
-            const expr = ui.createLabel({
-                text: `expr: ${el.str}`
-            });
-            const val = ui.createLabel({
-                text: () => "value: " + parseBigNumber(el.valueString.slice(1,-1)).toString()
+    static showVarPopup(target) {
+
+        if (expState === undefined) throw "NO EXP STATE"
+
+        if (!(target in MathExpUtils.TARGET_NAME)) throw `Popup called for invalid var target ${target}`
+
+        const map = expState.targetMap(target);
+        const order = expState.targetOrder(target);
+
+        let popup;
+
+        let entries = [];
+
+        for (let i = 0; i < order.length; i++) {
+            const name = order[i];
+            const entry = this.varEntry(target, i, name, map[name], () => popup.hide());
+            entries.push(entry);
+        }
+
+        let create = ui.createButton({text: "CREATE"})
+
+        popup = ui.createPopup({
+            title: MathExpUtils.TARGET_NAME_STR[target],
+            content: ui.createStackLayout({
+                children: [
+                    ui.createScrollView({
+                        content: ui.createStackLayout({children: entries})
+                    }),
+                    create
+                ]
             })
-            buttons.push(label);
-            buttons.push(expr);
-            buttons.push(val);
+            
+        })
+
+        create.onClicked = () => {
+            this.varPopup(target)
+            popup.hide();
         }
 
-        const content = ui.createStackLayout({
-            children: buttons
-        })
-
-        let popup = ui.createPopup({
-            title: `Test var popup`
-        })
-
-        popup.content = content;
-        
         popup.show();
-    }
-}
-
-class MathExpUtils {
-
-    static TARGET_NAME = {
-        global: 'global',
-        pub: 'pub',
-    }
-
-    static internalMap = {
-        get pubt() {
-            return (aTheoryId >= 0) ? pubTimes[aTheoryId] : 0;
-        },
-        get pubr() {
-            if (aTheoryId < 0) return -1;
-            const aTheory = game.activeTheory;
-            return aTheory.nextPublicationMultiplier / aTheory.publicationMultiplier;
-        }
-    };
-
-    constructor(globalMap, pubMap, expOrder) {
-        this.globalMap = globalMap;
-        this.pubMap = pubMap;
-        this.expMap = {
-            ...internalMap,
-            ...globalMap,
-            ...pubMap,
-        };
-
-        this.targetMap = (target) => {
-            switch (target) {
-                case this.TARGET_NAME.global:
-                    return globalMap;
-                case this.TARGET_NAME.pub:
-                    return pubMap;
-                default:
-                    throw `Unknown target map ${target}`
-            }
-        }
-    }
-
-    addVar(target, name, s, init, index) {
-
-        const targetMap = this.targetMap(target);
         
-        if (name in this.expMap) throw `Failed to create var ${name}: already exists`;
-
-        const me = MathExpression.parse(init);
-        const val = me.evaluate();
-        if (val == null) {
-            throw `Failed to initialize var ${name}: ${me.error}`;
-        }
-
-        const el = {str: s, valueString: BNtoString(val)};
-
-        targetMap[name] = el;
-        this.expMap[name] = el;
-
-        if (index === undefined) {
-            this.expOrder.push(name);
-        } else {
-            this.expOrder.splice(index, 0, name);
-        }
     }
 
-    delVar(target, name) {
-
-        const targetMap = this.targetMap(target);
-
-        if (!(name in targetMap)) throw `Failed to delete var ${name}: does not exist in ${target}`
-
-        delete targetMap[name];
-        delete this.expMap[name];
+    static varEntry(target, index, name, el, callback) {
         
-        const index = expOrder.indexOf(name);
-        if (index > -1){
-            expOrder.splice(index, 1);
-        }
-    }
+        const label = ui.createLabel({text: () => `${name} = ${el.value}`, fontSize: 14});
+        const expr = ui.createLabel({text: () => `${name}ₜ ← ${el.str ?? ""}`, fontSize: 14});
+        const iexpr = ui.createLabel({text: () => `${name}₀ ← ${el.init ?? ""}`, fontSize: 14});
+        const umode = ui.createLabel({
+            text: () => "update: " + MathExpUtils.MODESET_STR[el.updateMode],
+            fontSize: 12,
+            row: 0,
+            column: 0
+        });
+        const rmode = ui.createLabel({
+            text: () => "reset: " + MathExpUtils.MODESET_STR[el.resetMode],
+            fontSize: 12,
+            row: 0,
+            column: 1
+        });
 
-    evalVar(name) {
+        const modeContent = ui.createGrid({children: [umode, rmode]});
 
-        let el = this.expMap[name];
+        const labelContent = ui.createStackLayout({
+            children: [label, expr, iexpr, modeContent],
+            row: 0,
+            column: 0
+        });
+        
+        let edit = ui.createButton({text: "EDIT", backgroundColor: Color.fromRgb(0.4, 0.4, 0.4)})
+        let remove = ui.createButton({text: "DELETE", backgroundColor: Color.fromRgb(0.4, 0.4, 0.4)})
 
-        let s;
-        try {
-            s = this.replacer(el.str);
-        } catch (e) {
-            if (e == 'Key not found') return;
-            throw e;
+        const buttonContent = ui.createStackLayout({
+            children: [edit, remove],
+            row: 0,
+            column: 1
+        })
+
+        const content = ui.createGrid({
+            children: [labelContent, buttonContent],
+            columnDefinitions: ["1*", "50"],
+            margin: new Thickness(5)
+        })
+
+        edit.onClicked = () => {
+            this.varPopup(target, name, index, el)
+            callback();
         }
         
-        el.mexpr = this.newMe(el.mexpr, s);
-        const v = this.evalMe(el.mexpr);
-        if (v == null) {
-            if (el.mexpr.isErrorCritical) throw el.mexpr.error;
-            return;
+        remove.onClicked = () => {
+            expState.delVar(target, name, index);
+            callback();
         }
 
-        el.valueString = BNtoString(v);
-
-    }
-
-    replacer(s) {
-        const targ = new RegExp('\\b(?:' + Object.keys(expMap).join('|') + ')\\b', 'g')
-        return s.replace(targ, a => {
-            if (expMap[a].valueString === undefined) throw 'Key not found';
-            return `(${expMap[a].valueString})`;
+        return ui.createFrame({
+            content: content,
+            backgroundColor: Color.fromRgb(0.2, 0.2, 0.2)
         });
     }
 
-    newMe(me, s) {
-        if (me === undefined) return MathExpression.parse(s);
+    static varPopup(target, name, index, el) {
         
-        let dme = JSON.parse(Base64.decode(me.serialize()));
-        dme["Expression"] = '"' + s + '"';
-        const st = Base64.encode(JSON.stringify(dme));
-        return MathExpression.deserialize(st);
+        const titleStr = ((el && "Edit") ?? "Create") + ` ${MathExpUtils.TARGET_NAME_STR[target]}`
+
+        let nameLabel = ui.createLabel({text: "Name"})
+        let nameRecord = name ?? "";
+        let nameEntry = ui.createEntry({
+            placeholder: nameRecord,
+            onTextChanged: (_, s) => {nameRecord = s}
+        })
+
+        let strLabel = ui.createLabel({text: "Expression"})
+        let strRecord = el?.str ?? "";
+        let strEntry = ui.createEntry({
+            placeholder: strRecord,
+            onTextChanged: (_, s) => {strRecord = s}
+        })
+
+        let initLabel = ui.createLabel({text: "Initial Value"})
+        let initRecord = el?.init ?? "";
+        let initEntry = ui.createEntry({
+            placeholder: initRecord,
+            onTextChanged: (_, s) => {initRecord = s}
+        })
+
+        const modesetIter = {};
+        let modesetPrev = MathExpUtils.MODESET.PUBLISH;
+        for (const mode in MathExpUtils.MODESET) modesetIter[modesetPrev] = modesetPrev = mode;
+
+        let updateModeLabel = ui.createLabel({text: "Update Mode"})
+        let updateModeRecord = el?.updateMode ?? MathExpUtils.MODESET.NONE;
+        let updateModeButton = ui.createButton({
+            text: () => MathExpUtils.MODESET_STR[updateModeRecord],
+            onClicked: () => {updateModeRecord = modesetIter[updateModeRecord]}
+        })
+        
+        let resetModeLabel = ui.createLabel({text: "Reset Mode"})
+        let resetModeRecord = el?.resetMode ?? MathExpUtils.MODESET.NONE;
+        let resetModeButton = ui.createButton({
+            text: () => MathExpUtils.MODESET_STR[resetModeRecord],
+            onClicked: () => {resetModeRecord = modesetIter[resetModeRecord]}
+        })
+
+        const gridArr = [
+            [nameLabel, nameEntry],
+            [strLabel, strEntry],
+            [initLabel, initEntry],
+            [updateModeLabel, updateModeButton],
+            [resetModeLabel, resetModeButton]
+        ]
+
+        let gridChildren = [];
+        let i = 0;
+        for (const row of gridArr) {
+            let j = 0;
+            for (const item of row) {
+                item.row = i;
+                item.column = j++;
+                gridChildren.push(item);
+            }
+            i++;
+        }
+
+        const grid = ui.createGrid({
+            rowDefinitions: ["50", "1*"],
+            children: gridChildren
+        })
+
+
+        let apply = ui.createButton({
+            text: "Apply"
+        })
+        let cancel = ui.createButton({
+            text: "Cancel"
+        })
+
+        let popup = ui.createPopup({
+            title: titleStr,
+            content: ui.createStackLayout({
+                children: [grid, apply, cancel]
+            }),
+        })
+
+        const applyAction = () => {
+
+            if (nameRecord.length == 0) return;
+
+            const str = strRecord.length > 0 ? strRecord : undefined;
+            const init = initRecord.length > 0 ? initRecord : undefined;
+
+            const newobj = {str: str, init: init, updateMode: updateModeRecord, resetMode: resetModeRecord}
+
+            if (el === undefined) {
+                expState.addVar(target, nameRecord, undefined, newobj);
+            } else {
+                expState.editVar(target, name, index, nameRecord, el, newobj, init !== undefined);
+            }
+
+            popup.hide();
+
+        }
+
+        const cancelAction = () => {popup.hide();};
+
+        apply.onClicked = applyAction;
+        cancel.onClicked = cancelAction;
+
+        popup.show();
+
     }
 
-    evalMe(me) {
-        return me.evaluate();
+    static showExprPopup(mode) {
+        if (!(mode in this.exprLabels)) throw `Invalid expr mode ${mode}`
+
+        const entry = this.exprLabels[mode];
+
+        const popup = this.makeSimpleApplyPopup(
+            entry.s,
+            state[entry.v]?.str ?? "",
+            "",
+            record => {
+                if (state[entry.v] === undefined) {
+                    state[entry.v] = CustomME.create(record)
+                } else {
+                    state[entry.v].update({str: record});
+                    state[entry.v].initialize();
+                }
+                return true;
+            }
+        );
+
+        popup.show();
     }
 }
+PopupUtils.exprLabels = {
+    [MathExpUtils.MODESET.PRESTIGE]: {v: 'prestigeExpr', s: 'Prestige Expression'},
+    [MathExpUtils.MODESET.SUPREMACY]: {v: 'supremacyExpr', s: 'Supremacy Expression'},
+    [MathExpUtils.MODESET.GRADUATION]: {v: 'graduationExpr', s: 'Graduation Expression'}
+}
+
 
 var customReplacer = (_, val) => {
     try {
-        if (val instanceof BigNumber) return "BigNumber" + val.toBase64String();
-        if (val instanceof MathExpression) return "MathExpression" + val.serialize();
+        if (val instanceof BigNumber) return "BigNumber" + val.toBase64String(); // BigNumber
     } catch {}
     return val;
 }
 var customReviver = (_, val) => {
     if (val && typeof val === 'string') {
         if (val.startsWith("BigNumber")) return BigNumber.fromBase64String(val.substring(9));
-        if (val.startsWith("MathExpression")) return MathExpression.deserialize(val.substring(14));
     }
     return val;
 }
 
-var getInternalState = () => JSON.stringify(state, customReplacer);
+var getInternalState = () => state.serialize();
 
 var setInternalState = (s) => {
     if (s) {
-        const newState = JSON.parse(s, customReviver);
-        if (newState.version === undefined) return; // Version Control
-        state = newState;
+        state.importSerialization(s);
         ManagementUtils.refresh();
     }
 }
