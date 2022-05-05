@@ -167,6 +167,7 @@ var getCurrencyBarDelegate = () => {
     const variableGrid = ui.createGrid({
         columnDefinitions: vGridColumnDefinitions,
         children: vGridChildren,
+        isVisible: () => state.debug,
     })
 
 
@@ -188,6 +189,7 @@ var getCurrencyBarDelegate = () => {
     const exprGrid = ui.createGrid({
         columnDefinitions: vGridColumnDefinitions,
         children: vGridChildren,
+        isVisible: () => state.debug,
     })
 
 
@@ -971,19 +973,11 @@ class AllocUtils {
         // number of purchases to backtrack and brute force; 4 if gradf < ee30k, 10 otherwise
         // const REFUND_CNT = game.statistics.graduationF < BigNumber.fromComponents(1, 2, 29994) ? 4 : 10;
 
-        var debugTexts = [];
-
-        if (state.debug) debugTexts.push(this.debugSimpleStudentSnapshot());
-
         const upgrades = Array.from(game.researchUpgrades).filter(x => x.id <= 101 && x.isAvailable);
         upgrades.forEach(x => x.refund(-1));
 
-        if (state.debug) debugTexts.push(this.debugSimpleStudentSnapshot());
-
         if (state.useR9) game.researchUpgrades[8].buy(-1);
         else game.researchUpgrades[8].refund(-1);
-
-        if (state.debug) debugTexts.push(this.debugSimpleStudentSnapshot());
 
         const maxLevels = upgrades.map(x => x.maxLevel);
         const expIndex = upgrades.length - 1;
@@ -1003,9 +997,6 @@ class AllocUtils {
             (1 + game.dmu).log() / 1300,
             (1 + game.dpsi).log() / 255 * (10 + game.dpsi).log10().sqrt()
         ].map(v => v.toNumber());
-
-        if (state.debug) debugTexts.push(`vals: [${vals.toString()}]`);
-        if (state.debug) debugTexts.push(`pass0(${sigma}): [${levels.toString()}]`);
 
         while (true) {
 
@@ -1037,8 +1028,6 @@ class AllocUtils {
             levels[cand] += 1;
         }
 
-        if (state.debug) debugTexts.push(`pass1(${sigma}): [${levels.toString()}]`);
-
         while (history.length > 0) {
             
             let pool = 1;
@@ -1069,8 +1058,6 @@ class AllocUtils {
             }
         }
 
-        if (state.debug) debugTexts.push(`pass2(${sigma}): [${levels.toString()}]`);
-
         let search = (i, sigma, curSum) => { // TODO un-reuse variables
             if (i == expIndex) {
                 const cnt = Math.min(levels[i] + sigma/2 >> 0, 6);
@@ -1094,11 +1081,6 @@ class AllocUtils {
         for (let i = 0; i <= expIndex; i++)
             upgrades[i].buy(found.cnt[expIndex - i]);
 
-        if (state.debug) debugTexts.push(this.debugSimpleStudentSnapshot());
-
-        if (state.debug && game.researchUpgrades[8].level != (useR9 ? 3 : 0)) {
-            this.debugSimpleStudentPopup(debugTexts);
-        }
     }
 
     static researchCost(curLevel) {
